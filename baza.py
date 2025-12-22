@@ -24,8 +24,6 @@ with st.form("form_kategorie", clear_on_submit=True):
         else:
             st.error("Nazwa kategorii jest wymagana!")
 
----
-
 # --- SEKCJA 2: DODAWANIE PRODUKTU ---
 st.header("Dodaj Nowy Produkt")
 

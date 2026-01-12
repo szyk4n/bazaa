@@ -21,7 +21,7 @@ supabase = init_connection()
 
 st.title("📦 Zaawansowany System Magazynowy")
 
-# --- SEKCJA 1 & 2: DODAWANIE (KOLUMNY) ---
+# --- SEKCJA 1 & 2: DODAWANIE ---
 col_left, col_right = st.columns(2)
 
 with col_left:
@@ -98,7 +98,7 @@ try:
 
         st.divider()
 
-        # --- SEKCJA 4: ZARZĄDZANIE STANEM I USUWANIE ---
+        # --- SEKCJA 4: ZARZĄDZANIE (NAPRAWIONE BŁĘDY ID) ---
         st.header("⚙️ Operacje na produktach")
         
         tab_list, tab_edit, tab_delete = st.tabs(["📋 Lista", "📉 Zdejmij ze stanu", "🗑️ Usuń całkowicie"])
@@ -108,33 +108,38 @@ try:
         
         with tab_edit:
             st.subheader("Zmniejsz ilość produktu")
-            edit_options = {f"{row['nazwa']} (Obecnie: {row['liczba']} szt.)": row for _, row in df.iterrows()}
-            selected_prod_label = st.selectbox("Wybierz produkt do wydania", options=list(edit_options.keys()))
+            # Używamy unikalnych kluczy dla selectboxa
+            edit_options = {f"{row['nazwa']} (ID: {row['id']})": row for _, row in df.iterrows()}
+            selected_prod_label = st.selectbox("Wybierz produkt do wydania", options=list(edit_options.keys()), key="sb_edit")
             selected_row = edit_options[selected_prod_label]
             
-            remove_amount = st.number_input("Ile sztuk usunąć/wydać?", min_value=1, max_value=int(selected_row['liczba']), step=1)
+            remove_amount = st.number_input("Ile sztuk usunąć/wydać?", min_value=1, max_value=int(selected_row['liczba']) if selected_row['liczba'] > 0 else 1, step=1, key="ni_edit")
             
-            if st.button("Zaktualizuj stan"):
+            # Dodany unikalny klucz 'key' do przycisku
+            if st.button("Zaktualizuj stan", key="btn_update_stock"):
                 new_qty = selected_row['liczba'] - remove_amount
                 supabase.table("produkty").update({"liczba": new_qty}).eq("id", selected_row['id']).execute()
-                st.success(f"Zaktualizowano! Nowy stan dla {selected_row['nazwa']}: {new_qty}")
+                st.success(f"Zaktualizowano stan dla {selected_row['nazwa']}!")
                 st.rerun()
 
         with tab_delete:
             st.subheader("Usuwanie rekordu")
-            del_options = {f"{row['nazwa']} ({row['kategoria']})": row['id'] for _, row in df.iterrows()}
-            prod_to_del_label = st.selectbox("Wybierz produkt do CAŁKOWITEGO usunięcia", options=list(del_options.keys()))
+            del_options = {f"{row['nazwa']} (ID: {row['id']})": row['id'] for _, row in df.iterrows()}
+            prod_to_del_label = st.selectbox("Wybierz produkt do usunięcia", options=list(del_options.keys()), key="sb_delete")
             
-            confirm = st.checkbox("Potwierdzam, że chcę trwale usunąć ten produkt z bazy danych")
-            if st.button("❌ Usuń produkt") and confirm:
-                supabase.table("produkty").delete().eq("id", del_options[prod_to_del_label]).execute()
-                st.warning("Produkt został usunięty.")
-                st.rerun()
-            elif not confirm and st.button("❌ Usuń produkt"):
-                st.error("Musisz najpierw zaznaczyć potwierdzenie!")
+            confirm = st.checkbox("Potwierdzam chęć trwałego usunięcia", key="cb_confirm_del")
+            
+            # Dodany unikalny klucz 'key' do przycisku
+            if st.button("❌ Usuń produkt z bazy", key="btn_delete_final"):
+                if confirm:
+                    supabase.table("produkty").delete().eq("id", del_options[prod_to_del_label]).execute()
+                    st.warning("Produkt usunięty.")
+                    st.rerun()
+                else:
+                    st.error("Zaznacz pole potwierdzenia!")
 
     else:
         st.info("Brak produktów w bazie.")
 
 except Exception as e:
-    st.error(f"Błąd: {e}")
+    st.error(f"Błąd krytyczny: {e}")

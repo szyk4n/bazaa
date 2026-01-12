@@ -9,15 +9,19 @@ st.set_page_config(page_title="Magazyn Supabase", layout="wide")
 # --- POŁĄCZENIE Z SUPABASE ---
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error("Brak konfiguracji Supabase w Secrets!")
+        st.stop()
 
 supabase = init_connection()
 
 st.title("📦 System Zarządzania Produktami")
 
-# --- SEKCJA 1 & 2: FORMULARZE (Dwie kolumny) ---
+# --- SEKCJA 1 & 2: DODAWANIE (KOLUMNY) ---
 col_left, col_right = st.columns(2)
 
 with col_left:
@@ -32,7 +36,7 @@ with col_left:
                 try:
                     supabase.table("kategorie").insert({"nazwa": kat_nazwa, "opis": kat_opis}).execute()
                     st.success(f"Dodano kategorię: {kat_nazwa}")
-                    st.rerun() # Odświeżamy, aby kategoria pojawiła się w selectboxie
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Błąd: {e}")
             else:
@@ -40,7 +44,6 @@ with col_left:
 
 with col_right:
     st.header("Dodaj Produkt")
-    # Pobranie kategorii do selectboxa
     try:
         categories_query = supabase.table("kategorie").select("id, nazwa").execute()
         cat_options = {c['nazwa']: c['id'] for c in categories_query.data}
@@ -73,45 +76,58 @@ with col_right:
 
 st.divider()
 
-# --- SEKCJA 3: PODGLĄD DANYCH I WYKRESY ---
-st.header("📊 Analiza i Stan Magazynowy")
-
+# --- POBIERANIE DANYCH DO ANALIZY I USUWANIA ---
 try:
-    # Pobieramy produkty wraz z nazwą kategorii (join)
-    res = supabase.table("produkty").select("nazwa, liczba, cena, kategorie(nazwa)").execute()
+    # Pobieramy ID, żeby móc usuwać
+    res = supabase.table("produkty").select("id, nazwa, liczba, cena, kategorie(nazwa)").execute()
     
     if res.data:
-        # Konwersja do DataFrame
         df = pd.DataFrame(res.data)
-        # Wyciąganie nazwy kategorii z relacji
         df['kategoria'] = df['kategorie'].apply(lambda x: x['nazwa'] if x else "Brak")
         df['wartosc_suma'] = df['cena'] * df['liczba']
 
-        # Wyświetlanie metryk na górze
+        # --- SEKCJA 3: WYKRESY ---
+        st.header("📊 Analiza i Stan Magazynowy")
         m1, m2, m3 = st.columns(3)
         m1.metric("Suma sztuk", int(df['liczba'].sum()))
         m2.metric("Wartość magazynu", f"{df['wartosc_suma'].sum():,.2f} zł")
         m3.metric("Liczba produktów", len(df))
 
-        # Wykresy
         c1, c2 = st.columns(2)
-        
         with c1:
-            st.subheader("Udział wartościowy kategorii")
-            fig_pie = px.pie(df, values='wartosc_suma', names='kategoria', hole=0.4)
+            fig_pie = px.pie(df, values='wartosc_suma', names='kategoria', hole=0.4, title="Udział wartościowy kategorii")
             st.plotly_chart(fig_pie, use_container_width=True)
-            
         with c2:
-            st.subheader("Ilość sztuk per produkt")
-            fig_bar = px.bar(df, x='nazwa', y='liczba', color='kategoria', text='liczba')
+            fig_bar = px.bar(df, x='nazwa', y='liczba', color='kategoria', text='liczba', title="Ilość sztuk per produkt")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-        # Tabela na samym dole
-        with st.expander("Zobacz pełną tabelę danych"):
+        st.divider()
+
+        # --- SEKCJA 4: USUWANIE I TABELA ---
+        st.header("⚙️ Zarządzanie produktami")
+        
+        tab1, tab2 = st.tabs(["Lista Produktów", "Usuń Produkt"])
+        
+        with tab1:
             st.dataframe(df[['nazwa', 'kategoria', 'liczba', 'cena', 'wartosc_suma']], use_container_width=True)
+        
+        with tab2:
+            st.subheader("Usuń produkt z bazy")
+            # Tworzymy słownik do wyboru: "Nazwa Produktu (ID)" -> ID
+            delete_options = {f"{row['nazwa']} ({row['kategoria']})": row['id'] for _, row in df.iterrows()}
+            product_to_delete = st.selectbox("Wybierz produkt do usunięcia", options=list(delete_options.keys()))
             
+            if st.button("❌ Usuń trwale wybrany produkt"):
+                try:
+                    product_id = delete_options[product_to_delete]
+                    supabase.table("produkty").delete().eq("id", product_id).execute()
+                    st.warning(f"Usunięto produkt!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Błąd podczas usuwania: {e}")
+
     else:
-        st.info("Brak danych do wyświetlenia. Dodaj pierwszy produkt!")
+        st.info("Baza produktów jest pusta. Dodaj pierwszy produkt powyżej.")
 
 except Exception as e:
-    st.error(f"Wystąpił problem z pobieraniem danych: {e}")
+    st.error(f"Problem z bazą danych: {e}")

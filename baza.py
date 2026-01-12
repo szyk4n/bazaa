@@ -4,7 +4,7 @@ import plotly.express as px
 from supabase import create_client, Client
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Magazyn Supabase", layout="wide")
+st.set_page_config(page_title="Magazyn Supabase PRO", layout="wide")
 
 # --- POŁĄCZENIE Z SUPABASE ---
 @st.cache_resource
@@ -13,13 +13,13 @@ def init_connection():
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
-    except Exception as e:
+    except Exception:
         st.error("Brak konfiguracji Supabase w Secrets!")
         st.stop()
 
 supabase = init_connection()
 
-st.title("📦 System Zarządzania Produktami")
+st.title("📦 Zaawansowany System Magazynowy")
 
 # --- SEKCJA 1 & 2: DODAWANIE (KOLUMNY) ---
 col_left, col_right = st.columns(2)
@@ -52,7 +52,7 @@ with col_right:
 
     with st.form("form_produkty", clear_on_submit=True):
         prod_nazwa = st.text_input("Nazwa produktu")
-        prod_liczba = st.number_input("Liczba (szt.)", min_value=0, step=1)
+        prod_liczba = st.number_input("Początkowa liczba (szt.)", min_value=0, step=1)
         prod_cena = st.number_input("Cena (zł)", min_value=0.0, format="%.2f")
         selected_cat_name = st.selectbox("Wybierz kategorię", options=list(cat_options.keys()))
         submit_prod = st.form_submit_button("Zapisz produkt")
@@ -60,9 +60,7 @@ with col_right:
         if submit_prod:
             if prod_nazwa and selected_cat_name:
                 product_data = {
-                    "nazwa": prod_nazwa,
-                    "liczba": prod_liczba,
-                    "cena": prod_cena,
+                    "nazwa": prod_nazwa, "liczba": prod_liczba, "cena": prod_cena,
                     "kategoria_id": cat_options[selected_cat_name]
                 }
                 try:
@@ -76,9 +74,8 @@ with col_right:
 
 st.divider()
 
-# --- POBIERANIE DANYCH DO ANALIZY I USUWANIA ---
+# --- POBIERANIE DANYCH ---
 try:
-    # Pobieramy ID, żeby móc usuwać
     res = supabase.table("produkty").select("id, nazwa, liczba, cena, kategorie(nazwa)").execute()
     
     if res.data:
@@ -87,47 +84,57 @@ try:
         df['wartosc_suma'] = df['cena'] * df['liczba']
 
         # --- SEKCJA 3: WYKRESY ---
-        st.header("📊 Analiza i Stan Magazynowy")
+        st.header("📊 Analiza Magazynu")
         m1, m2, m3 = st.columns(3)
-        m1.metric("Suma sztuk", int(df['liczba'].sum()))
-        m2.metric("Wartość magazynu", f"{df['wartosc_suma'].sum():,.2f} zł")
-        m3.metric("Liczba produktów", len(df))
+        m1.metric("Łącznie sztuk", int(df['liczba'].sum()))
+        m2.metric("Wartość całkowita", f"{df['wartosc_suma'].sum():,.2f} zł")
+        m3.metric("Liczba pozycji", len(df))
 
         c1, c2 = st.columns(2)
         with c1:
-            fig_pie = px.pie(df, values='wartosc_suma', names='kategoria', hole=0.4, title="Udział wartościowy kategorii")
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(px.pie(df, values='wartosc_suma', names='kategoria', hole=0.4, title="Wartość wg kategorii"), use_container_width=True)
         with c2:
-            fig_bar = px.bar(df, x='nazwa', y='liczba', color='kategoria', text='liczba', title="Ilość sztuk per produkt")
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(px.bar(df, x='nazwa', y='liczba', color='kategoria', title="Stany ilościowe"), use_container_width=True)
 
         st.divider()
 
-        # --- SEKCJA 4: USUWANIE I TABELA ---
-        st.header("⚙️ Zarządzanie produktami")
+        # --- SEKCJA 4: ZARZĄDZANIE STANEM I USUWANIE ---
+        st.header("⚙️ Operacje na produktach")
         
-        tab1, tab2 = st.tabs(["Lista Produktów", "Usuń Produkt"])
+        tab_list, tab_edit, tab_delete = st.tabs(["📋 Lista", "📉 Zdejmij ze stanu", "🗑️ Usuń całkowicie"])
         
-        with tab1:
+        with tab_list:
             st.dataframe(df[['nazwa', 'kategoria', 'liczba', 'cena', 'wartosc_suma']], use_container_width=True)
         
-        with tab2:
-            st.subheader("Usuń produkt z bazy")
-            # Tworzymy słownik do wyboru: "Nazwa Produktu (ID)" -> ID
-            delete_options = {f"{row['nazwa']} ({row['kategoria']})": row['id'] for _, row in df.iterrows()}
-            product_to_delete = st.selectbox("Wybierz produkt do usunięcia", options=list(delete_options.keys()))
+        with tab_edit:
+            st.subheader("Zmniejsz ilość produktu")
+            edit_options = {f"{row['nazwa']} (Obecnie: {row['liczba']} szt.)": row for _, row in df.iterrows()}
+            selected_prod_label = st.selectbox("Wybierz produkt do wydania", options=list(edit_options.keys()))
+            selected_row = edit_options[selected_prod_label]
             
-            if st.button("❌ Usuń trwale wybrany produkt"):
-                try:
-                    product_id = delete_options[product_to_delete]
-                    supabase.table("produkty").delete().eq("id", product_id).execute()
-                    st.warning(f"Usunięto produkt!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Błąd podczas usuwania: {e}")
+            remove_amount = st.number_input("Ile sztuk usunąć/wydać?", min_value=1, max_value=int(selected_row['liczba']), step=1)
+            
+            if st.button("Zaktualizuj stan"):
+                new_qty = selected_row['liczba'] - remove_amount
+                supabase.table("produkty").update({"liczba": new_qty}).eq("id", selected_row['id']).execute()
+                st.success(f"Zaktualizowano! Nowy stan dla {selected_row['nazwa']}: {new_qty}")
+                st.rerun()
+
+        with tab_delete:
+            st.subheader("Usuwanie rekordu")
+            del_options = {f"{row['nazwa']} ({row['kategoria']})": row['id'] for _, row in df.iterrows()}
+            prod_to_del_label = st.selectbox("Wybierz produkt do CAŁKOWITEGO usunięcia", options=list(del_options.keys()))
+            
+            confirm = st.checkbox("Potwierdzam, że chcę trwale usunąć ten produkt z bazy danych")
+            if st.button("❌ Usuń produkt") and confirm:
+                supabase.table("produkty").delete().eq("id", del_options[prod_to_del_label]).execute()
+                st.warning("Produkt został usunięty.")
+                st.rerun()
+            elif not confirm and st.button("❌ Usuń produkt"):
+                st.error("Musisz najpierw zaznaczyć potwierdzenie!")
 
     else:
-        st.info("Baza produktów jest pusta. Dodaj pierwszy produkt powyżej.")
+        st.info("Brak produktów w bazie.")
 
 except Exception as e:
-    st.error(f"Problem z bazą danych: {e}")
+    st.error(f"Błąd: {e}")
